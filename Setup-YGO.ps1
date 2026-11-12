@@ -1,6 +1,7 @@
 param(
     [string]$KeyFile,
-    [string]$BundleDirectory
+    [string]$BundleDirectory,
+    [switch]$PCUpdateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,12 @@ $titleId = '010022400be5a000'
 $environmentRoot = Join-Path $env:LOCALAPPDATA 'YGO-PC-Full/Environment/windows-v1'
 $releaseUrl = 'https://github.com/yjmjeminq/windows-project-environment/releases/download/windows-v1'
 $manifestSha256 = 'a951907c3e212965b431d980e16a0d56091a76c4d4809343f3c7a7e97c3817f7'
+$pcUpdate = @{
+    name = 'pc-update-2026-11-12.age'
+    sha256 = '8f889343d51398480e7640478e293736e64e7cbbd08de5980fadd4c12272ad39'
+    bytes = 235946344
+    files = 4189
+}
 
 function Receive-ReleaseFile($Uri, $Destination) {
     $partial = "$Destination.download"
@@ -116,10 +123,104 @@ function Write-JsonFile($Path, $Data) {
     }
 }
 
+function Assert-PCEnvironment {
+    $required = @(
+        'YuGiOh.exe'
+        'YGO_2020.dat'
+        'YGO_2020.toc'
+        'WolfX-1.6.1/Yu-Gi-Oh_Loader.exe'
+        'WolfX-1.6.1/Plugins/Yu-Gi-Oh-Core.dll'
+        'WolfX-1.6.1/Plugins/Yu-Gi-Oh-Cards.dll'
+        'Mods/Master Duel Engine/duel.dll'
+    )
+    foreach ($relative in $required) {
+        if (-not [IO.File]::Exists((Join-Path $project $relative))) {
+            throw "PC installation is missing $relative. Run Setup-YGO.cmd first."
+        }
+    }
+}
+
+function Install-PCUpdate($BundleDirectory, $Online, $Stage, $KeyFile) {
+    Assert-PCEnvironment
+    $encrypted = Join-Path $BundleDirectory $pcUpdate.name
+    if ($Online -and -not (Test-EnvironmentPart $encrypted $pcUpdate)) {
+        Write-Host 'Downloading the PC update...'
+        Receive-ReleaseFile "$releaseUrl/$($pcUpdate.name)" $encrypted
+    }
+    if (-not (Test-EnvironmentPart $encrypted $pcUpdate)) {
+        throw "Missing or damaged PC update $($pcUpdate.name)."
+    }
+
+    Write-Host 'Applying the PC update...'
+    $archive = Join-Path $Stage 'pc-update.tar.gz'
+    $payload = Join-Path $Stage 'pc-update'
+    Expand-EncryptedBundle @($encrypted) $KeyFile $archive (Get-AgeExecutable $Stage)
+    [IO.Directory]::CreateDirectory($payload) | Out-Null
+    & tar.exe -xzf $archive -C $payload
+    if ($LASTEXITCODE -ne 0) { throw 'The PC update could not be extracted.' }
+    [IO.File]::Delete($archive)
+    $files = @(Get-ChildItem -LiteralPath $payload -File -Recurse -Force)
+    if ($files.Count -ne $pcUpdate.files) { throw 'The PC update is incomplete.' }
+
+    $modListPath = Join-Path $project 'Mods/modlist.json'
+    $modList = if ([IO.File]::Exists($modListPath)) {
+        Get-Content -LiteralPath $modListPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } else { [pscustomobject]@{ mods = @() } }
+    if ($modList.mods -isnot [array]) { throw 'Invalid Mods/modlist.json.' }
+    $managedMods = [ordered]@{
+        'Master Duel Engine' = $true
+        '2020-2021-Cards' = $false
+        '2026-01-Cards' = $false
+        '2026-11-KR-Cards' = $true
+        'Anime-Sanctity' = $true
+        'Korean-Readable-Font' = $true
+    }
+    $updatedEntries = foreach ($id in $managedMods.Keys) {
+        $entry = $modList.mods | Where-Object { $_.id -eq $id } | Select-Object -First 1
+        if (-not $entry) { $entry = [pscustomobject]@{ id = $id } }
+        $entry | Add-Member -NotePropertyName enabled -NotePropertyValue $managedMods[$id] -Force
+        $entry
+    }
+    $modList.mods = @($updatedEntries) + @($modList.mods | Where-Object { -not $managedMods.Contains([string]$_.id) })
+
+    $backupRoot = Join-Path $Stage 'pc-backup'
+    $changes = [Collections.Generic.Stack[object]]::new()
+    try {
+        foreach ($file in $files) {
+            $relative = $file.FullName.Substring($payload.Length + 1)
+            $destination = Join-Path $project $relative
+            $backup = $null
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+            if ([IO.File]::Exists($destination)) {
+                $backup = Join-Path $backupRoot $relative
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($backup)) | Out-Null
+                [IO.File]::Replace($file.FullName, $destination, $backup)
+            } else { [IO.File]::Move($file.FullName, $destination) }
+            $changes.Push(@{ destination = $destination; backup = $backup })
+        }
+        Write-JsonFile $modListPath $modList
+    } catch {
+        foreach ($change in $changes) {
+            try {
+                if ($change.backup) {
+                    [IO.File]::Replace($change.backup, $change.destination, [NullString]::Value)
+                } else { [IO.File]::Delete($change.destination) }
+            } catch {
+                $script:retainStage = $true
+                Write-Warning "Could not restore $($change.destination). Update backups are at $backupRoot."
+            }
+        }
+        throw
+    }
+    Write-Host "PC update ready in $project"
+}
+
 [IO.Directory]::CreateDirectory($environmentRoot) | Out-Null
 $lock = [IO.File]::Open((Join-Path $environmentRoot 'setup.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
 $stage = Join-Path $project ('.ygo-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+$retainStage = $false
 try {
+    if ($PCUpdateOnly) { Assert-PCEnvironment }
     [IO.Directory]::CreateDirectory($stage) | Out-Null
     if (-not $KeyFile) { $KeyFile = Join-Path $environmentRoot 'environment-recovery.agekey' }
     if ([IO.File]::Exists($KeyFile)) {
@@ -140,6 +241,10 @@ try {
     if ($online) {
         $BundleDirectory = Join-Path $environmentRoot 'download'
         [IO.Directory]::CreateDirectory($BundleDirectory) | Out-Null
+    }
+    if ($PCUpdateOnly) {
+        Install-PCUpdate $BundleDirectory $online $stage $KeyFile
+        return
     }
     $manifestFile = Join-Path $BundleDirectory 'environment.json'
     if ($online) { Receive-ReleaseFile "$releaseUrl/environment.json" $manifestFile }
@@ -206,9 +311,12 @@ try {
     $update = Join-Path $project $updates[0].Name
     Write-JsonFile (Join-Path $portable "games/$titleId/updates.json") @{ selected = $update; paths = @($update) }
     Write-Host "Environment ready in $project"
+    if ($online -or [IO.File]::Exists((Join-Path $BundleDirectory $pcUpdate.name))) {
+        Install-PCUpdate $BundleDirectory $online $stage $KeyFile
+    }
 } finally {
     try {
-        if ([IO.Directory]::Exists($stage)) {
+        if (-not $retainStage -and [IO.Directory]::Exists($stage)) {
             $resolved = (Resolve-Path -LiteralPath $stage).ProviderPath
             if ([IO.Path]::GetDirectoryName($resolved) -eq $project -and [IO.Path]::GetFileName($resolved) -match '^\.ygo-[a-f0-9]{12}$') {
                 Remove-Item -LiteralPath $resolved -Recurse -Force
