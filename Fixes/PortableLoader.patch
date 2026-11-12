@@ -1,0 +1,31 @@
+diff --git a/Yu-Gi-Oh_Loader/Game.cpp b/Yu-Gi-Oh_Loader/Game.cpp
+index 51cd8ce..5bc7af6 100644
+--- a/Yu-Gi-Oh_Loader/Game.cpp
++++ b/Yu-Gi-Oh_Loader/Game.cpp
+@@ -1,4 +1,4 @@
+-﻿#include <fstream>
++#include <fstream>
+ #include <iostream>
+ #include <Shlwapi.h>
+ #include <detours.h>
+@@ -153,8 +153,20 @@ bool Game::TrySetFolder(const char* folder)
+     return true;
+ }
+ 
++static std::string LoaderFolder();
++
+ BOOL Game::Locate()
+ {
++    // This package places the loader in a subfolder of a complete game copy.
++    // Start that copy before considering a Steam path saved on this PC.
++    const auto local = std::filesystem::path(LoaderFolder()).parent_path();
++    std::error_code error;
++    if (!local.empty()
++        && std::filesystem::is_regular_file(local / "YGO_2020.toc", error)
++        && std::filesystem::is_regular_file(local / "YGO_2020.dat", error)
++        && TrySetFolder(local.string().c_str()))
++        return TRUE;
++
+     char path[MAX_PATH] = {};
+     // Steam's key first (the normal case), then our HKCU mirror (a non-Steam copy the player located).
+     if (ReadInstallLocation(HKEY_LOCAL_MACHINE, path, sizeof(path)) && TrySetFolder(path))

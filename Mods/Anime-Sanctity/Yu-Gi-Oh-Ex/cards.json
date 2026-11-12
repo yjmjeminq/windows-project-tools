@@ -1,0 +1,13 @@
+{
+  "cards": [
+    {
+      "id": 23501,
+      "name": "하늘의 선물2",
+      "description": "양쪽 플레이어는 각각 자신의 패가 6장이 되도록 덱에서 드로우한다.",
+      "copies": 3,
+      "image": "art/Spell/5479.jpg",
+      "kind": "Spell",
+      "icon": "Normal"
+    }
+  ]
+}

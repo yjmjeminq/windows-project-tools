@@ -1,0 +1,9 @@
+{
+  "name": "하늘의 선물2",
+  "version": "1.0",
+  "description": "양쪽 플레이어는 각각 자신의 패가 6장이 되도록 덱에서 드로우한다.",
+  "requires": [
+    "Yu-Gi-Oh-Cards",
+    "Yu-Gi-Oh-Core/MasterDuelEngine"
+  ]
+}

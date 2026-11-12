@@ -1,0 +1,12 @@
+{
+  "name": "Card pool through 2021",
+  "version": "0.2",
+  "author": "Card data and art from Yu-Gi-Oh-Ex v1.6.1",
+  "website": "https://github.com/Arefu/Yu-Gi-Oh-Ex/releases/tag/v1.6.1",
+  "description": "Offline card pool through 2021, with three copies of each card.",
+  "details": "Adds 1,424 cards and grants three copies of all 10,027 non-token base cards. Requires Master Duel Engine.",
+  "requires": [
+    "Yu-Gi-Oh-Cards",
+    "Yu-Gi-Oh-Core/MasterDuelEngine"
+  ]
+}
