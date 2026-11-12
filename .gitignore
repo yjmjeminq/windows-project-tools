@@ -4,6 +4,8 @@
 !/.gitattributes
 !/README.md
 !/Play-YGO.cmd
+!/Setup-YGO.cmd
+!/Setup-YGO.ps1
 !/Fixes/
 !/Switch-Port/
 !/Mods/
