@@ -8,7 +8,7 @@ $project = (Get-Item -LiteralPath $PSScriptRoot).FullName
 $ryujinxPath = 'ryujinx-1.3.3-win_x64/publish'
 $titleId = '010022400be5a000'
 $environmentRoot = Join-Path $env:LOCALAPPDATA 'YGO-PC-Full/Environment/windows-v1'
-$releaseUrl = 'https://github.com/yjmjeminq/YGO-PC-Full-Environment/releases/download/windows-v1'
+$releaseUrl = 'https://github.com/yjmjeminq/windows-project-environment/releases/download/windows-v1'
 $manifestSha256 = 'a951907c3e212965b431d980e16a0d56091a76c4d4809343f3c7a7e97c3817f7'
 
 function Receive-ReleaseFile($Uri, $Destination) {
