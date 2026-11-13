@@ -1,0 +1,183 @@
+diff --git a/Yu-Gi-Oh_Loader Plugins/Yu-Gi-Oh-Cards/Card.cpp b/Yu-Gi-Oh_Loader Plugins/Yu-Gi-Oh-Cards/Card.cpp
+index 80d8580..df22d50 100644
+--- a/Yu-Gi-Oh_Loader Plugins/Yu-Gi-Oh-Cards/Card.cpp	
++++ b/Yu-Gi-Oh_Loader Plugins/Yu-Gi-Oh-Cards/Card.cpp	
+@@ -47,6 +47,8 @@ constexpr uint32_t kSavedCardTableSize = 0xFFFF;
+ 
+ // The unlock count table the trunk reads is sized for the vanilla cards only.
+ constexpr size_t kUnlockBufferSize = 0xFFFF;
++static constexpr uintptr_t kRelatedOwnershipReturn = 0x1408AF97F;
++static bool relatedOwnershipPatched = false;
+ 
+ // The game frees the illustration buffer with its own imported free() (IAT 0x1409F9528),
+ // so it has to come from the game's imported malloc, not this DLL's debug CRT.
+@@ -500,6 +502,9 @@ namespace Card
+     // counts, so at ~4000 cards that was ~4000 x 4000 comparisons every time the trunk/unlock table rebuilt -
+     // the "trunk load chugs" the user reported. Rebuilt whenever ExtraCards is (re)loaded.
+     static std::unordered_map<uint16_t, size_t> g_ExtraCardIndex;
++    // Some duel animations request art by engine ID. A shared alias cannot
++    // identify a particular card, so leave it unmapped.
++    static std::unordered_map<uint16_t, uint16_t> g_EngineArtIds;
+ 
+     // archetype code -> custom card ids in it, for the Is_CardInNamedArchetype hook (hot: called per candidate card
+     // per timing check inside duels, so it is a hash lookup, not a scan of ExtraCards).
+@@ -509,11 +514,20 @@ namespace Card
+     {
+         g_ExtraCardIndex.clear();
+         g_ExtraCardIndex.reserve(ExtraCards.size());
++        g_EngineArtIds.clear();
+         g_ArchetypeMembers.clear();
+         for (size_t i = 0; i < ExtraCards.size(); ++i)
+         {
+-            g_ExtraCardIndex[ExtraCards[i].ID] = i;
+-            for (int code : ExtraCards[i].Archetypes)
++            const ExtraCard& card = ExtraCards[i];
++            g_ExtraCardIndex[card.ID] = i;
++            // IDs below the custom range belong to the original game.
++            if (const int engineId = EngineIdOf(card); engineId >= kFirstExtraCardId)
++            {
++                auto [entry, inserted] = g_EngineArtIds.try_emplace(static_cast<uint16_t>(engineId), card.ID);
++                if (!inserted)
++                    entry->second = 0;
++            }
++            for (int code : card.Archetypes)
+                 g_ArchetypeMembers[code].insert(ExtraCards[i].ID);
+         }
+     }
+@@ -524,6 +538,14 @@ namespace Card
+         return it != g_ExtraCardIndex.end() ? &ExtraCards[it->second] : nullptr;
+     }
+ 
++    static ExtraCard* FindEngineArtCard(uint16_t engineId)
++    {
++        auto it = g_EngineArtIds.find(engineId);
++        if (it == g_EngineArtIds.end() || !it->second || !ExtraLoadIDs.contains(it->second))
++            return nullptr;
++        return FindExtraCard(it->second);
++    }
++
+     // Kept for the one caller (the duplicate-id check during load, before the index exists yet) that must
+     // still see cards as they're added one at a time.
+     static ExtraCard* FindExtraCardLinear(uint16_t id)
+@@ -1337,8 +1359,65 @@ namespace
+     // sound, nothing else). The gates are widened to the limit of the save's card table
+     // rather than removed, so ids below 3900 - an empty deck slot is id 0 - are still
+     // rejected exactly as in the unmodified game.
++    void ExtendRaceFilter()
++    {
++        struct Option
++        {
++            uint64_t Index;
++            uint64_t TextId;
++            uintptr_t GetName;
++            int32_t Icon;
++            uint32_t Padding;
++            uint64_t Mask;
++        };
++        struct List
++        {
++            uint64_t Count;
++            const Option* Options;
++        };
++        static_assert(sizeof(Option) == 40 && sizeof(List) == 16);
++        constexpr uintptr_t descriptor = 0x140A7A390;
++        constexpr uintptr_t stockOptions = 0x140A7B210;
++        constexpr uintptr_t raceName = 0x140870200;
++        constexpr size_t stockCount = 24;
++        const auto& stock = *reinterpret_cast<const List*>(descriptor);
++        if (stock.Count != stockCount || reinterpret_cast<uintptr_t>(stock.Options) != stockOptions
++            || stock.Options[stockCount - 1].GetName != raceName
++            || stock.Options[stockCount - 1].Mask != (1ull << stockCount))
++        {
++            Logger::WriteLog("Race filter options did not match this game version", MODULE_NAME, 2);
++            return;
++        }
++
++        static Option options[26]{};
++        std::copy_n(stock.Options, stockCount, options);
++        for (const auto race : { Card::CreatorGod, Card::Illusion })
++        {
++            const auto id = static_cast<unsigned>(race);
++            options[id - 1] = { id - 1, 0, raceName, -1, 0, 1ull << id };
++        }
++        const List replacement{std::size(options), options};
++        if (YGO::Memory::WriteValue(descriptor, replacement))
++            Logger::WriteLog("Race filter includes Creator God and Illusion", MODULE_NAME, 0);
++    }
++
+     void ApplyInteractionPatches()
+     {
++        ExtendRaceFilter();
++        // RelatedCardsPanel_Rebuild uses the extended live ownership table below.
++        // Out-of-range entries jump to the loop's existing skip-card path.
++        static_assert(kUnlockBufferSize == 0xFFFF);
++        relatedOwnershipPatched = YGO::Memory::PatchBytes(0x1408AF9C3,
++            { 0x3D, 0xB6, 0x27, 0x00, 0x00, 0x73, 0x07, 0x8B, 0xC0, 0x48, 0x03,
++              0xC3, 0xEB, 0x03, 0x49, 0x8B, 0xC4, 0x44, 0x8B, 0x44, 0x24, 0x30 },
++            { 0x44, 0x8B, 0x44, 0x24, 0x30,       // mov r8d,[rsp+30h]
++              0x3D, 0xFF, 0xFF, 0x00, 0x00,       // cmp eax,0FFFFh
++              0x0F, 0x83, 0xF9, 0x00, 0x00, 0x00, // jae 0x1408AFACC
++              0x8B, 0xC0, 0x48, 0x03, 0xC3, 0x90 }, // mov eax,eax; add rax,rbx; nop
++            "Related cards ownership filter");
++        if (relatedOwnershipPatched)
++            Logger::WriteLog("Related cards ownership filter uses the extended card table", MODULE_NAME, 0);
++
+         constexpr uint32_t kGateRange = kSavedCardTableSize - kVanillaKonamiIdBase - 1; // cmp reg, 0x2B3C
+ 
+         PatchImm32(0x14083639D, kGateRange); // DeckEdit_TrunkInputHandler: select / move to deck
+@@ -1460,7 +1539,7 @@ bool __fastcall Hook_Get_IllustrationData(int64_t a1, uint16_t konamiId, void**
+     // has - ExtraLoadIDs only knows custom ids, so without this it always falls through to the vanilla loader
+     // for a borrowed id (this was the bug: a borrowed card showed the real vanilla card's own art in a duel).
+     auto borrowed = g_BorrowedToHigh.find(konamiId);
+-    const uint16_t realId = borrowed != g_BorrowedToHigh.end() ? borrowed->second : konamiId;
++    uint16_t realId = borrowed != g_BorrowedToHigh.end() ? borrowed->second : konamiId;
+ 
+     auto it = Card::ExtraLoadIDs.find(realId);
+     Card::ExtraCard* card = it != Card::ExtraLoadIDs.end() ? Card::FindExtraCard(realId) : nullptr;
+@@ -1487,12 +1566,18 @@ bool __fastcall Hook_Get_IllustrationData(int64_t a1, uint16_t konamiId, void**
+                     return true;
+                 }
+         }
+-        if (realId >= kFirstExtraCardId)
+-            Logger::WriteLog(std::format("Illustration asked for id {}, which is not a loaded custom card", realId), MODULE_NAME, 1);
+-        return reinterpret_cast<Get_IllustrationData_t>(orig_Get_IllustrationData)(a1, konamiId, buffer, size);
++        card = Card::FindEngineArtCard(realId);
++        if (!card)
++        {
++            if (realId >= kFirstExtraCardId)
++                Logger::WriteLog(std::format("Illustration asked for id {}, which is not a loaded custom card", realId), MODULE_NAME, 1);
++            return reinterpret_cast<Get_IllustrationData_t>(orig_Get_IllustrationData)(a1, konamiId, buffer, size);
++        }
++        realId = card->ID;
++        Logger::WriteLog(std::format("Illustration uses card {} for engine id {}", realId, konamiId), MODULE_NAME, 0);
+     }
+     Logger::WriteLog(std::format("Illustration asked for custom card {} (kind {}){}", realId, card->Props.KindValue,
+-        realId != konamiId ? std::format(", borrowed as {} for a duel", konamiId) : std::string()), MODULE_NAME, 69);
++        borrowed != g_BorrowedToHigh.end() ? std::format(", borrowed as {} for a duel", konamiId) : std::string()), MODULE_NAME, 69);
+ 
+     // The game picks its uncensored art when it runs in Japanese (Get_IllustrationData reads g_bIsJpVersion); a custom card's
+     // "imageUncensored" stands in for that, and the normal picture is used when it has none.
+@@ -1565,6 +1650,8 @@ static bool WantsExtendedUnlockCounts(const void* returnAddress)
+     case 0x1408A369B: // DeckSelect_UpdateOwnedCardCounts
+     case 0x1407CAAE0: // Get_OwnedCopiesByKonamiId
+         return true;
++    case kRelatedOwnershipReturn:
++        return relatedOwnershipPatched;
+     default:
+         return false;
+     }
+@@ -1675,7 +1762,13 @@ unsigned char* __fastcall Hook_Get_LiveUnlockCounts(unsigned int profile)
+     unsigned char* original = reinterpret_cast<unsigned char*(__fastcall*)(unsigned int)>(orig_Get_LiveUnlockCounts)(profile);
+     DealStarterIfNew(profile);
+ 
+-    if (!original || !WantsExtendedUnlockCounts(_ReturnAddress()))
++    const void* caller = _ReturnAddress();
++    if (!original && relatedOwnershipPatched && reinterpret_cast<uintptr_t>(caller) == kRelatedOwnershipReturn)
++    {
++        static unsigned char emptyRelatedOwnership[kUnlockBufferSize]{};
++        return emptyRelatedOwnership;
++    }
++    if (!original || !WantsExtendedUnlockCounts(caller))
+         return original;
+ 
+     static std::mutex lock;

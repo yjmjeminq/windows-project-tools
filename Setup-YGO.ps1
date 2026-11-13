@@ -12,10 +12,10 @@ $environmentRoot = Join-Path $env:LOCALAPPDATA 'YGO-PC-Full/Environment/windows-
 $releaseUrl = 'https://github.com/yjmjeminq/windows-project-environment/releases/download/windows-v1'
 $manifestSha256 = 'a951907c3e212965b431d980e16a0d56091a76c4d4809343f3c7a7e97c3817f7'
 $pcUpdate = @{
-    name = 'pc-update-2026-11-12.age'
-    sha256 = '8f889343d51398480e7640478e293736e64e7cbbd08de5980fadd4c12272ad39'
-    bytes = 235946344
-    files = 4189
+    name = 'pc-update-2026-11-13.age'
+    sha256 = 'a51783fba57a9c07457477c83fa73f5ed8e59007a942718dabc0ef29d3a0ee05'
+    bytes = 235252449
+    files = 4191
 }
 
 function Receive-ReleaseFile($Uri, $Destination) {

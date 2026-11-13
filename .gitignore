@@ -13,6 +13,7 @@
 
 /Fixes/*
 !/Fixes/OfflineDuelListFix.cpp
+!/Fixes/PC-CardRaceAndRelatedCards.patch
 !/Fixes/PortableLoader.patch
 !/Fixes/StartGame.ps1
 
