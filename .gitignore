@@ -19,8 +19,14 @@
 
 /Switch-Port/*
 !/Switch-Port/Tools/
+!/Switch-Port/OpenDuel/
 /Switch-Port/Tools/*
 !/Switch-Port/Tools/*.py
+/Switch-Port/OpenDuel/*
+!/Switch-Port/OpenDuel/CMakeLists.txt
+!/Switch-Port/OpenDuel/switch-toolchain.cmake
+!/Switch-Port/OpenDuel/*.hpp
+!/Switch-Port/OpenDuel/*.cpp
 
 /Mods/*
 !/Mods/2020-2021-Cards/
@@ -42,3 +48,5 @@
 !/Mods/Anime-Sanctity/Yu-Gi-Oh-Ex/
 /Mods/Anime-Sanctity/Yu-Gi-Oh-Ex/*
 !/Mods/Anime-Sanctity/Yu-Gi-Oh-Ex/cards.json
+
+Fixes/detours/
